@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { AxiosError } from 'axios';
 import api from '../api/client';
 
-// Google Identity Services 타입 정의
+// Google Identity Services 및 Kakao SDK 타입 정의
 declare global {
   interface Window {
     google?: {
@@ -24,6 +24,16 @@ declare global {
         };
       };
     };
+    Kakao?: {
+      init: (appKey: string) => void;
+      isInitialized: () => boolean;
+      Auth: {
+        login: (options: {
+          success: (authObj: { access_token: string }) => void;
+          fail: (err: unknown) => void;
+        }) => void;
+      };
+    };
   }
 }
 
@@ -39,8 +49,9 @@ function LoginPage() {
   const [message, setMessage] = useState<string | null>(null);
   const hiddenGoogleButtonRef = useRef<HTMLDivElement>(null);
   
-  // Google Client ID (환경변수로 관리하는 것이 좋지만, 일단 하드코딩)
-  const GOOGLE_CLIENT_ID = '686156856290-je71ac5ub92p4n6viuu3jh3qpsnvom3p.apps.googleusercontent.com';
+  // OAuth2 클라이언트 ID (환경변수에서 가져오기)
+  const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '686156856290-je71ac5ub92p4n6viuu3jh3qpsnvom3p.apps.googleusercontent.com';
+  const KAKAO_APP_KEY = import.meta.env.VITE_KAKAO_APP_KEY || '';
 
   const getErrorMessage = (err: unknown, fallback: string) => {
     const axiosErr = err as AxiosError<{ message?: string }>;
@@ -84,6 +95,8 @@ function LoginPage() {
       
       // 회원가입이 완료되지 않은 경우 (STEP2 상태) 카테고리 선택 페이지로 이동
       if (data.user && !data.user.member) {
+        // signupUserId 저장 (카테고리 선택 페이지에서 사용)
+        localStorage.setItem('signupUserId', String(data.user.id));
         navigate('/signup/categories');
       } else {
         navigate('/');
@@ -95,25 +108,87 @@ function LoginPage() {
     }
   };
 
+  // 카카오 Access Token으로 로그인 처리
+  const handleKakaoLogin = async (accessToken: string) => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const payload = {
+        provider: 'OAUTH_KAKAO',
+        idToken: accessToken, // 카카오는 Access Token을 idToken 필드에 전송
+      };
+      const { data } = await api.post('/auth/login/oauth', payload);
+      localStorage.setItem('accessToken', data.token);
+      localStorage.setItem('refreshToken', data.refreshToken);
+      localStorage.setItem('userEmail', data.user?.userId || '');
+      
+      // 회원가입이 완료되지 않은 경우 (STEP2 상태) 카테고리 선택 페이지로 이동
+      if (data.user && !data.user.member) {
+        // signupUserId 저장 (카테고리 선택 페이지에서 사용)
+        localStorage.setItem('signupUserId', String(data.user.id));
+        navigate('/signup/categories');
+      } else {
+        navigate('/');
+      }
+    } catch (err) {
+      setMessage(getErrorMessage(err, '카카오 로그인에 실패했습니다.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 카카오 로그인 버튼 클릭 핸들러
+  const handleKakaoLoginClick = () => {
+    if (!window.Kakao) {
+      setMessage('카카오 SDK를 불러오는 중입니다. 잠시 후 다시 시도해주세요.');
+      return;
+    }
+
+    if (!KAKAO_APP_KEY || KAKAO_APP_KEY === 'YOUR_KAKAO_APP_KEY') {
+      setMessage('카카오 앱 키가 설정되지 않았습니다. .env.local 파일에 VITE_KAKAO_APP_KEY를 설정해주세요.');
+      return;
+    }
+
+    if (!window.Kakao.isInitialized()) {
+      // 카카오 SDK 초기화
+      window.Kakao.init(KAKAO_APP_KEY);
+    }
+
+    window.Kakao.Auth.login({
+      success: (authObj) => {
+        handleKakaoLogin(authObj.access_token);
+      },
+      fail: (err) => {
+        setMessage('카카오 로그인에 실패했습니다.');
+        console.error('Kakao login error:', err);
+      },
+    });
+  };
+
   // Google Identity Services 초기화
   useEffect(() => {
     const initializeGoogleSignIn = () => {
       if (window.google && hiddenGoogleButtonRef.current) {
-        window.google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: (response) => {
-            handleGoogleCredential(response.credential);
-          },
-        });
+        try {
+          window.google.accounts.id.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: (response) => {
+              handleGoogleCredential(response.credential);
+            },
+          });
 
-        // 숨겨진 Google 버튼 렌더링
-        window.google.accounts.id.renderButton(hiddenGoogleButtonRef.current, {
-          type: 'standard',
-          size: 'large',
-          text: 'signin_with',
-          theme: 'outline',
-          width: '100%',
-        });
+          // 숨겨진 Google 버튼 렌더링
+          window.google.accounts.id.renderButton(hiddenGoogleButtonRef.current, {
+            type: 'standard',
+            size: 'large',
+            text: 'signin_with',
+            theme: 'outline',
+            width: '100%',
+          });
+        } catch (error) {
+          // Google 설정 오류는 조용히 처리 (콘솔에만 로그)
+          console.warn('Google Identity Services 초기화 실패:', error);
+        }
       }
     };
 
@@ -205,8 +280,8 @@ function LoginPage() {
           <span className="text-muted" style={{ fontSize: 13 }}>다른 계정으로 로그인</span>
         </div>
 
-        {/* Google 로그인 버튼 */}
-        <div className="text-center">
+        {/* 소셜 로그인 버튼들 */}
+        <div className="text-center" style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
           {/* 숨겨진 Google 버튼 (실제 로그인 기능) */}
           <div 
             ref={hiddenGoogleButtonRef}
@@ -214,6 +289,7 @@ function LoginPage() {
               display: 'none'
             }}
           />
+          
           {/* 커스텀 Google 로고 버튼 */}
           <button
             className="google-login-btn"
@@ -231,7 +307,6 @@ function LoginPage() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              margin: '0 auto',
               padding: 0,
               transition: 'all 0.2s',
             }}
@@ -263,6 +338,45 @@ function LoginPage() {
                   fill="#EA4335"
                 />
               </g>
+            </svg>
+          </button>
+
+          {/* 카카오 로그인 버튼 */}
+          <button
+            onClick={handleKakaoLoginClick}
+            disabled={loading}
+            type="button"
+            title="카카오로 로그인"
+            style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              border: 'none',
+              backgroundColor: '#FEE500',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              if (!loading) {
+                e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                e.currentTarget.style.backgroundColor = '#FDD835';
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.boxShadow = 'none';
+              e.currentTarget.style.backgroundColor = '#FEE500';
+            }}
+          >
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M10 0C4.477 0 0 3.582 0 8c0 2.797 1.737 5.27 4.375 6.682L3.125 20l5.625-3.125C9.125 16.875 9.562 16.875 10 16.875c5.523 0 10-3.582 10-8S15.523 0 10 0z"
+                fill="#000000"
+                fillOpacity="0.85"
+              />
             </svg>
           </button>
         </div>
