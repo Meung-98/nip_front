@@ -73,7 +73,7 @@ function LoginPage() {
       localStorage.setItem('refreshToken', data.refreshToken);
       localStorage.setItem('userEmail', form.userId);
       localStorage.setItem('username', data.user?.username || '');
-      navigate('/');
+      navigate('/main');
     } catch (err) {
       setMessage(getErrorMessage(err, '로그인에 실패했습니다.'));
     } finally {
@@ -102,7 +102,7 @@ function LoginPage() {
         localStorage.setItem('signupUserId', String(data.user.id));
         navigate('/signup/categories');
       } else {
-        navigate('/');
+        navigate('/main');
       }
     } catch (err) {
       setMessage(getErrorMessage(err, 'Google 로그인에 실패했습니다.'));
@@ -132,7 +132,7 @@ function LoginPage() {
         localStorage.setItem('signupUserId', String(data.user.id));
         navigate('/signup/categories');
       } else {
-        navigate('/');
+        navigate('/main');
       }
     } catch (err) {
       setMessage(getErrorMessage(err, '카카오 로그인에 실패했습니다.'));

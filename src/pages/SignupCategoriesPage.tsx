@@ -79,7 +79,7 @@ function SignupCategoriesPage() {
       console.log('카테고리 저장 성공');
       setMessage('가입이 완료되었습니다!');
       localStorage.removeItem('signupUserId');
-      navigate('/login');
+      navigate('/main');
     } catch (err) {
       console.error('카테고리 저장 실패:', err);
       const axiosError = err as AxiosError<{ message?: string }>;
