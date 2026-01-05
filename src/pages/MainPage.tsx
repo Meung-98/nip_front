@@ -43,6 +43,21 @@ function MainPage() {
   const [newsByCategory, setNewsByCategory] = useState<Map<string, NewsItem[]>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [summaryState, setSummaryState] = useState<Record<string, {
+    summary?: string;
+    loading: boolean;
+    error?: string;
+    expanded: boolean;
+  }>>({});
+
+  const clearAuthAndGoLogin = () => {
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('userEmail');
+    localStorage.removeItem('username');
+    localStorage.removeItem('signupUserId');
+    navigate('/login', { replace: true });
+  };
 
   useEffect(() => {
     // 로그인 상태 확인
@@ -50,7 +65,7 @@ function MainPage() {
     const storedUsername = localStorage.getItem('username');
     
     if (!accessToken) {
-      navigate('/login');
+      clearAuthAndGoLogin();
       return;
     }
     
@@ -89,7 +104,7 @@ function MainPage() {
       console.error('사용자 정보 가져오기 실패:', axiosError.response?.data?.message || axiosError.message);
       // 인증 오류인 경우 로그인 페이지로 이동
       if (axiosError.response?.status === 401) {
-        navigate('/login');
+        clearAuthAndGoLogin();
         return;
       }
       setError('사용자 정보를 불러올 수 없습니다.');
@@ -138,6 +153,67 @@ function MainPage() {
       console.error('뉴스 가져오기 실패:', err);
       // 뉴스 로딩 실패해도 페이지는 표시
       setLoading(false);
+    }
+  };
+
+  // 뉴스 아이템을 구분할 키 (링크 우선)
+  const getItemKey = (item: NewsItem) => {
+    return item.link || item.originallink || item.title;
+  };
+
+  const stripHtml = (html: string) => html.replace(/<[^>]*>?/g, ' ').trim();
+
+  const handleNewsClick = async (item: NewsItem) => {
+    const key = getItemKey(item);
+    const current = summaryState[key];
+
+    // 요약이 열려있는 상태에서 한 번 더 클릭하면 원문으로 이동
+    if (current && current.summary && current.expanded && !current.loading) {
+      const targetUrl = item.link || item.originallink;
+      if (targetUrl) {
+        window.open(targetUrl, '_blank', 'noopener,noreferrer');
+      }
+      return;
+    }
+
+    // 이미 요약을 받아온 경우: 펼치기만
+    if (current && current.summary && !current.expanded) {
+      setSummaryState((prev) => ({
+        ...prev,
+        [key]: { ...current, expanded: true, error: undefined }
+      }));
+      return;
+    }
+
+    // 중복 요청 방지
+    if (current && current.loading) {
+      return;
+    }
+
+    // 처음 클릭: 요약 요청
+    setSummaryState((prev) => ({
+      ...prev,
+      [key]: { summary: undefined, loading: true, error: undefined, expanded: true }
+    }));
+
+    try {
+      const { data } = await api.post('/ai/summary', {
+        url: item.link || item.originallink,
+        title: stripHtml(item.title),
+        description: stripHtml(item.description || '')
+      });
+
+      setSummaryState((prev) => ({
+        ...prev,
+        [key]: { summary: data.summary, loading: false, expanded: true }
+      }));
+    } catch (err) {
+      const axiosError = err as AxiosError<{ message?: string }>;
+      const msg = axiosError.response?.data?.message || axiosError.message || '요약을 불러오지 못했습니다.';
+      setSummaryState((prev) => ({
+        ...prev,
+        [key]: { summary: undefined, loading: false, error: msg, expanded: true }
+      }));
     }
   };
 
@@ -234,12 +310,14 @@ function MainPage() {
                       gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
                       gap: '16px'
                     }}>
-                      {newsItems.map((item, index) => (
-                        <a
+                      {newsItems.map((item, index) => {
+                        const key = getItemKey(item);
+                        const summary = summaryState[key];
+                        return (
+                        <div
                           key={index}
-                          href={item.link}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                          role="button"
+                          tabIndex={0}
                           style={{
                             display: 'block',
                             padding: '20px',
@@ -249,7 +327,8 @@ function MainPage() {
                             color: 'inherit',
                             transition: 'all 0.2s',
                             cursor: 'pointer',
-                            backgroundColor: '#f8fafc'
+                            backgroundColor: '#f8fafc',
+                            outline: 'none'
                           }}
                           onMouseEnter={(e) => {
                             e.currentTarget.style.borderColor = '#3b82f6';
@@ -262,6 +341,13 @@ function MainPage() {
                             e.currentTarget.style.boxShadow = 'none';
                             e.currentTarget.style.transform = 'translateY(0)';
                             e.currentTarget.style.backgroundColor = '#f8fafc';
+                          }}
+                          onClick={() => handleNewsClick(item)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleNewsClick(item);
+                            }
                           }}
                         >
                           {item.image && item.image.trim() !== '' && (
@@ -293,6 +379,27 @@ function MainPage() {
                             }}
                             dangerouslySetInnerHTML={{ __html: item.title }}
                           />
+                          {summary?.expanded && (
+                            <div style={{
+                              backgroundColor: '#eef2ff',
+                              border: '1px solid #c7d2fe',
+                              borderRadius: '6px',
+                              padding: '12px',
+                              color: '#312e81',
+                              fontSize: '14px',
+                              lineHeight: 1.6,
+                              marginBottom: '12px'
+                            }}>
+                              {summary.loading && '제미나이 요약 중입니다...'}
+                              {!summary.loading && summary.error && `요약 오류: ${summary.error}`}
+                              {!summary.loading && !summary.error && summary.summary}
+                              {!summary.loading && !summary.error && (
+                                <div style={{ marginTop: '8px', fontSize: '12px', color: '#6366f1' }}>
+                                  한 번 더 클릭하면 원문을 새 탭에서 열어요.
+                                </div>
+                              )}
+                            </div>
+                          )}
                           <div style={{ 
                             fontSize: '12px', 
                             color: '#94a3b8', 
@@ -306,8 +413,8 @@ function MainPage() {
                               day: 'numeric'
                             })}
                           </div>
-                        </a>
-                      ))}
+                        </div>
+                      )})}
                     </div>
                   )}
                 </div>
